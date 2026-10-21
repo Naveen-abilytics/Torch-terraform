@@ -1,0 +1,31 @@
+# Terraform
+**/.terraform/*
+**/.terraform.lock.hcl.bak
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+tfplan.*
+crash.log
+crash.*.log
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI
+.terraformrc
+terraform.rc
+
+# Git / editors
+.git/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
