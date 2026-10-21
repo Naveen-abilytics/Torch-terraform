@@ -117,6 +117,32 @@ permissions policy. Take the `role_arn` output → that is `AWS_ROLE_ARN`.
 > `Invalid principal: OIDC provider token.actions.githubusercontent.com does not exist`.
 > That is the "still asking for an OIDC provider" symptom — flip it back to `true`.
 
+#### Already have the provider? Paste its ARN
+
+If the account already has the GitHub OIDC provider, **never let Terraform create it** —
+and give Terraform the real ARN so the trust policy references it verbatim:
+
+```hcl
+create_oidc_role           = true
+create_oidc_provider       = false
+existing_oidc_provider_arn = "arn:aws:iam::008971661427:oidc-provider/token.actions.githubusercontent.com"
+```
+
+Find the ARN:
+
+```bash
+aws iam list-open-id-connect-providers
+# or: IAM console -> Identity providers -> GitHub Actions -> Provider ARN
+```
+
+With `existing_oidc_provider_arn` set, Terraform skips the provider entirely
+(`count = 0`) and uses your ARN in the role's trust policy. Leave it empty and the ARN
+is derived from the account id — same result, less typing.
+
+> The provider ARN must belong to the **same account** as the role
+> (`008971661427`). A provider ARN from a different account is rejected by AWS with
+> `Invalid principal`.
+
 ### Method B — static secret
 
 ```hcl
@@ -129,8 +155,6 @@ Apply creates **only** the shared permissions policy, the IAM user `github-actio
 and an access key. Nothing OIDC-related is touched, so this works even when the
 account cannot register `token.actions.githubusercontent.com`. Take
 `static_access_key_id` and `static_secret_access_key` from the outputs.
-
-> This is the configuration currently in `bootstrap-oidc/terraform.tfvars`.
 
 ## 2. GitHub: secrets and variables
 

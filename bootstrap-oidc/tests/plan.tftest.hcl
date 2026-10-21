@@ -60,6 +60,32 @@ run "plan_with_existing_provider" {
   }
 }
 
+# An explicitly supplied provider ARN must be used verbatim in the trust
+# policy, and Terraform must not try to create the provider.
+run "plan_with_explicit_provider_arn" {
+  command = plan
+
+  variables {
+    aws_region                 = "us-east-1"
+    github_org                 = "acme"
+    expected_account_id        = "008971661427"
+    github_repo                = "demo"
+    create_oidc_role           = true
+    create_oidc_provider       = true
+    existing_oidc_provider_arn = "arn:aws:iam::008971661427:oidc-provider/token.actions.githubusercontent.com"
+  }
+
+  assert {
+    condition     = length(aws_iam_openid_connect_provider.github) == 0
+    error_message = "An existing provider ARN must not trigger provider creation."
+  }
+
+  assert {
+    condition     = strcontains(aws_iam_role.github_actions[0].assume_role_policy, "arn:aws:iam::008971661427:oidc-provider/token.actions.githubusercontent.com")
+    error_message = "The trust policy must use the supplied provider ARN."
+  }
+}
+
 # Static-credentials mode: an IAM user with an access key, sharing the same
 # scoped policy as the OIDC role.
 run "plan_with_static_user" {
@@ -69,6 +95,7 @@ run "plan_with_static_user" {
     aws_region           = "us-east-1"
     github_org           = "acme"
     github_repo          = "demo"
+    create_oidc_role     = false
     create_oidc_provider = false
     create_static_user   = true
   }

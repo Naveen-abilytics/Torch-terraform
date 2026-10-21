@@ -26,11 +26,18 @@ locals {
   log_group_arn = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/ecs/${var.app_name}"
   ecs_role_arn  = "arn:aws:iam::${local.account_id}:role/${var.app_name}-*"
 
-  # When the provider already exists (create_oidc_provider = false) it is not
-  # managed here, so fall back to its well-known ARN.
-  oidc_provider_arn = try(
-    aws_iam_openid_connect_provider.github[0].arn,
-    "arn:aws:iam::${local.account_id}:oidc-provider/token.actions.githubusercontent.com"
+  # True only when Terraform actually creates the OIDC provider. This must
+  # match the resource count exactly - the two are used together below.
+  creates_oidc_provider = var.create_oidc_role && var.create_oidc_provider && var.existing_oidc_provider_arn == ""
+
+  # The provider this role trusts. When it already exists it is referenced by
+  # ARN; when Terraform creates it, the ARN is read from the resource.
+  oidc_provider_arn = (
+    var.existing_oidc_provider_arn != ""
+    ? var.existing_oidc_provider_arn
+    : (local.creates_oidc_provider
+      ? aws_iam_openid_connect_provider.github[0].arn
+    : "arn:aws:iam::${local.account_id}:oidc-provider/token.actions.githubusercontent.com")
   )
 
   github_subjects = [
@@ -180,7 +187,7 @@ locals {
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
-  count = var.create_oidc_role && var.create_oidc_provider ? 1 : 0
+  count = local.creates_oidc_provider ? 1 : 0
 
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]

@@ -12,7 +12,8 @@ output "oidc_provider_arn" {
   description = "ARN of the GitHub OIDC identity provider. Null when OIDC is not used."
   value = (
     !var.create_oidc_role ? null :
-    var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn :
+    var.existing_oidc_provider_arn != "" ? var.existing_oidc_provider_arn :
+    local.creates_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn :
     "arn:aws:iam::${local.account_id}:oidc-provider/token.actions.githubusercontent.com"
   )
 }

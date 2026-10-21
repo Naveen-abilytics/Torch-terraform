@@ -67,6 +67,18 @@ variable "create_oidc_provider" {
   default     = true
 }
 
+variable "existing_oidc_provider_arn" {
+  description = <<-EOT
+    ARN of the GitHub OIDC identity provider that already exists in the account.
+    Find it in the AWS console: IAM -> Identity providers -> GitHub Actions, or
+      aws iam list-open-id-connect-providers
+    Leave empty to derive it from the account id. When set, Terraform never
+    tries to create the provider.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "create_oidc_role" {
   description = <<-EOT
     Create the OIDC role (and, if create_oidc_provider is true, the OIDC provider

@@ -1,7 +1,6 @@
 # Copy to terraform.tfvars and fill in.
 github_org  = "Naveen-abilytics"
-github_repo = "
-Torch-terraform"
+github_repo = "Torch-terraform"
 
 aws_region = "us-east-1"
 
@@ -11,3 +10,28 @@ ecr_repository_name = "sample-app"
 
 github_branch      = "main"
 github_environment = "production"
+
+# Safety guard: the bootstrap refuses to run against any other AWS account.
+expected_account_id = "008971661427"
+
+# ---------------------------------------------------------------------------
+# Auth mode.
+#
+# Method A (OIDC)  : create_oidc_role = true
+# Method B (static) : create_oidc_role = false, create_static_user = true
+# ---------------------------------------------------------------------------
+create_oidc_role = true
+
+# The account already has the GitHub OIDC provider, so Terraform must not
+# create it. Paste the provider ARN here (IAM -> Identity providers ->
+# GitHub Actions), or run:  aws iam list-open-id-connect-providers
+existing_oidc_provider_arn = ""
+
+# Only consulted when create_oidc_role = true.
+# true  -> Terraform registers the OIDC provider in the account
+# false -> the account already has it; Terraform references it by ARN
+create_oidc_provider = false
+
+# Set to true to also create the scoped IAM user + access key used by the
+# "static credentials" auth mode (AWS_AUTH_MODE=static).
+create_static_user = false
