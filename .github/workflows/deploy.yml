@@ -1,28 +1,28 @@
-name: Build & Deploy (ECS Fargate)
+name: Build (ECS Fargate image)
 
 on:
   push:
     branches: [main]
     paths:
       - "app/**"
-      - "terraform/**"
-      - "scripts/broker-aws-credentials.sh"
+      - ".github/workflows/deploy.yml"
+  pull_request:
+    paths:
+      - "app/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Image tag to deploy (leave empty to use the commit SHA)"
+        description: "Image tag to push (leave empty to use the commit SHA)"
         required: false
         type: string
 
-# No id-token permission: this pipeline does not use OIDC. It brokers its AWS
-# credentials out of AWS Secrets Manager at runtime.
 permissions:
   contents: read
 
 concurrency:
-  group: ecs-deploy-${{ github.ref }}
-  cancel-in-progress: false
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -30,8 +30,79 @@ env:
   ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'sample-app' }}
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Always runs. No AWS credentials, no network calls: this is the gate that
+  # proves the image builds and the app answers on every push and pull request.
+  # ---------------------------------------------------------------------------
   build:
-    name: Build image & plan
+    name: Build & smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: false
+          load: true
+          tags: sample-app:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the container
+        run: |
+          set -euo pipefail
+          docker run -d --name smoke -p 8080:8080 \
+            -e APP_MESSAGE="Hello from AWS Secrets Manager" \
+            -e APP_REGION="us-east-1" \
+            sample-app:ci
+
+          cleanup() { docker rm -f smoke >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          echo "waiting for the container to answer /health"
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/health >/dev/null 2>&1; then
+              echo "up after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "::error::the container never became healthy"
+              docker logs smoke
+              exit 1
+            fi
+            sleep 1
+          done
+
+          {
+            echo "### Container smoke test"
+            echo '```json'
+            curl -fsS http://localhost:8080/
+            curl -fsS http://localhost:8080/health
+            curl -fsS http://localhost:8080/info
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # Prove the injected config made it into the process.
+          curl -fsS http://localhost:8080/ | grep -q "Hello from AWS Secrets Manager" \
+            || { echo "::error::APP_MESSAGE was not picked up by the app"; exit 1; }
+
+      - name: Show container logs
+        if: always()
+        run: docker logs smoke || true
+
+  # ---------------------------------------------------------------------------
+  # Pushes the image to ECR. Requires the Secrets Manager broker, so it is
+  # skipped on pull requests and when the repo has not been bootstrapped yet.
+  # This job does NOT deploy: it only publishes the artefact.
+  # ---------------------------------------------------------------------------
+  push:
+    name: Push image to ECR
+    needs: build
+    if: ${{ github.event_name != 'pull_request' && vars.CI_CREDENTIALS_SECRET_ARN != '' }}
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.tag.outputs.image_tag }}
@@ -39,7 +110,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # The only credential in GitHub. It can read exactly one secret and
-      # nothing else. The deploy key it unlocks never appears in GitHub.
+      # nothing else. The key it unlocks never appears in GitHub.
       - name: Broker AWS credentials from Secrets Manager
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.SM_READER_ACCESS_KEY_ID }}
@@ -51,13 +122,15 @@ jobs:
         id: aws
         run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
 
+      - uses: docker/setup-buildx-action@v3
+
+      # The ECS service can only reference an image that already exists in
+      # ECR, so the repository is created before the image is pushed.
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.16.6
           terraform_wrapper: true
 
-      # No S3 backend: the state file is carried between runs in the GitHub
-      # Actions cache. Prefix order matters - the "final" cache wins.
       - name: Restore Terraform state
         uses: actions/cache/restore@v4
         with:
@@ -71,17 +144,9 @@ jobs:
         working-directory: terraform
         run: terraform init -input=false
 
-      # The ECS service can only reference an image that already exists in
-      # ECR, so the repository is created before the image is pushed.
-      - name: Bootstrap ECR repository
+      - name: Ensure the ECR repository exists
         working-directory: terraform
         run: terraform apply -input=false -auto-approve -target=aws_ecr_repository.app
-
-      - name: Save Terraform state
-        uses: actions/cache/save@v4
-        with:
-          path: terraform/terraform.tfstate
-          key: tfstate-${{ github.run_id }}
 
       - name: Docker login to ECR
         run: |
@@ -97,123 +162,35 @@ jobs:
           echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: |
+            ${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.image_tag }}
+            ${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
         env:
-          REGISTRY: ${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
           TAG: ${{ steps.tag.outputs.image_tag }}
         run: |
-          IMAGE="$ECR_REPOSITORY:$TAG"
-          docker build -t "$IMAGE" app/
-          docker tag "$IMAGE" "$ECR_REPOSITORY:latest"
-          docker push "$IMAGE"
-          docker push "$ECR_REPOSITORY:latest"
-
-      - name: Terraform plan
-        working-directory: terraform
-        env:
-          TF_VAR_image_tag: ${{ steps.tag.outputs.image_tag }}
-        run: terraform plan -input=false -out=tfplan
-
-      - name: Summarise plan
-        working-directory: terraform
-        run: |
           {
-            echo "### Terraform plan"
+            echo "### Image pushed"
+            echo ""
             echo '```'
-            terraform show -no-color tfplan
+            echo "${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/$ECR_REPOSITORY:$TAG"
+            echo '```'
+            echo ""
+            echo "No deployment was triggered. Publish it manually with:"
+            echo ""
+            echo '```bash'
+            echo "aws ecs update-service --cluster ${{ vars.ECR_REPOSITORY }} --service ${{ vars.ECR_REPOSITORY }} --force-new-deployment"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan-${{ github.run_id }}
-          path: terraform/tfplan
-          retention-days: 7
-          if-no-files-found: error
-
-      # Last step of the job: the brokered credentials are wiped off the
-      # runner as soon as the work is done.
-      - name: Scrub brokered credentials
-        if: always()
-        run: rm -f ~/.aws/credentials ~/.aws/config
-
-  deploy:
-    name: Deploy (needs approval)
-    needs: build
-    runs-on: ubuntu-latest
-    # The environment is where the manual approval gate lives.
-    # Settings -> Environments -> production -> Deployment protection rules ->
-    # Required reviewers. The job parks in "Waiting for approval" until you approve.
-    environment:
-      name: production
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Broker AWS credentials from Secrets Manager
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.SM_READER_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.SM_READER_SECRET_ACCESS_KEY }}
-          CI_CREDENTIALS_SECRET_ARN: ${{ vars.CI_CREDENTIALS_SECRET_ARN }}
-        run: bash scripts/broker-aws-credentials.sh
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.16.6
-          terraform_wrapper: true
-
-      - name: Restore Terraform state
-        uses: actions/cache/restore@v4
-        with:
-          path: terraform/terraform.tfstate
-          key: tfstate-${{ github.run_id }}
-          restore-keys: |
-            tfstate-final-
-            tfstate-
-
-      - name: Terraform init
-        working-directory: terraform
-        run: terraform init -input=false
-
-      - name: Download plan artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan-${{ github.run_id }}
-          path: terraform
-
-      - name: Terraform apply (saved plan)
-        working-directory: terraform
-        run: terraform apply -input=false tfplan
-
-      - name: Persist Terraform state
-        uses: actions/cache/save@v4
-        with:
-          path: terraform/terraform.tfstate
-          key: tfstate-final-${{ github.run_id }}
-
-      - name: Read outputs
-        id: outputs
-        working-directory: terraform
-        run: |
-          echo "cluster=$(terraform output -raw ecs_cluster_name)" >> "$GITHUB_OUTPUT"
-          echo "service=$(terraform output -raw ecs_service_name)" >> "$GITHUB_OUTPUT"
-
-      - name: Smoke test
-        env:
-          CLUSTER: ${{ steps.outputs.outputs.cluster }}
-          SERVICE: ${{ steps.outputs.outputs.service }}
-        run: |
-          set -euo pipefail
-          TASK=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
-            --query 'taskArns[0]' --output text)
-          IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
-            --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[?name=='privateIPv4'].value | [0]" --output text)
-          echo "Task $TASK is on $IP"
-          curl --retry 12 --retry-delay 5 --retry-all-errors --fail "http://$IP:8080/health"
-          echo ""
-          echo "### App is live at http://$IP:8080" >> "$GITHUB_STEP_SUMMARY"
-
-      # Last step of the job: the brokered credentials are wiped off the
-      # runner as soon as the work is done.
+      # Last step: the brokered credentials are wiped off the runner.
       - name: Scrub brokered credentials
         if: always()
         run: rm -f ~/.aws/credentials ~/.aws/config

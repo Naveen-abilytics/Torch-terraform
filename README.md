@@ -1,7 +1,8 @@
-# sample-app — ECS on Fargate, deployed by GitHub Actions, managed by Terraform
+# sample-app — ECS on Fargate, image built by GitHub Actions, managed by Terraform
 
 A complete, working reference stack. Push to `main`, the pipeline builds the image,
-produces a Terraform plan, **stops and waits for your approval**, then applies it.
+smoke-tests it, and pushes it to **ECR**. It does **not** deploy: the ECS service is
+created by Terraform when you choose to run it.
 
 All application configuration lives in **AWS Secrets Manager** and is injected into the
 ECS task at runtime. The pipeline holds **no AWS credentials** — it brokers a key pair
@@ -14,8 +15,8 @@ out of Secrets Manager on each run.
 | **No VPC** | Zero VPC, subnet, route table, IGW or NAT resources are created. The stack reads the account's existing default VPC through `data` sources and places the task in its default public subnet. |
 | **No S3** | No bucket. The image lives in **ECR** (a registry, not a bucket). Terraform state is carried in the GitHub Actions cache, not in S3. |
 | **No database** | No RDS, no DynamoDB. The app is stateless; state lives in the process. |
+| **Build only, no deploy** | The workflow ends at "image pushed to ECR". There is no deploy job, no environment gate and no `terraform apply` of the service. |
 | **High-level config** | One `aws_ecs_service`, one `aws_ecs_task_definition`, one `aws_ecr_repository`. No load balancer, no auto-scaling, no bespoke IAM sprawl. |
-| **Deploy needs permission** | The `deploy` job is bound to the GitHub Environment `production`. With a required reviewer configured, the run parks in **"Waiting for approval"** until you approve it. |
 
 > **Why a VPC is involved at all:** ECS/Fargate is bound to a VPC by the API — there is no
 > "VPC-less" ECS. The way to honour *no VPC* is to create none and reuse the one your
@@ -25,20 +26,22 @@ out of Secrets Manager on each run.
 ## Architecture
 
 ```
-main ──► [build & plan]  (runs on every push, no approval needed)
-          ├─ broker: reader key → read ONE secret → deploy key pair
-          ├─ terraform apply -target=ECR repo   (repo must exist before the image)
-          ├─ docker build + push → ECR
-          └─ terraform plan -out=tfplan  → job summary + artifact
+main / PR ──► [build]        (always runs: no AWS, no credentials)
+               ├─ docker build
+               ├─ run the container
+               ├─ curl /health until it answers
+               └─ assert the injected config reached the app
                         │
                         ▼
-           [deploy]  environment: production   ◄── YOU APPROVE HERE
-                        │
-                        ├─ broker again (fresh credentials for this job)
-                        ├─ terraform apply tfplan
-                        ├─ smoke test the public endpoint
-                        └─ state persisted to the Actions cache
+              [push]         (main only, needs the reader secret)
+               ├─ broker: reader key → read ONE secret → deploy key pair
+               ├─ terraform apply -target=<ECR repo>   (repo must exist first)
+               ├─ docker build + push → ECR
+               └─ done. Nothing is deployed.
 ```
+
+The `deploy.yml` filename is kept only because the workflow is registered under it; the
+workflow itself no longer deploys.
 
 ## How credentials work — the Secrets Manager broker
 
@@ -76,7 +79,7 @@ reader (see *Rotating credentials*) and move on.
 │   ├── Dockerfile
 │   ├── package.json
 │   └── server.js                 # reads APP_* values injected from Secrets Manager
-├── terraform/                    # the stack that gets deployed
+├── terraform/                    # the stack (applied by you, not by CI)
 │   ├── ecs.tf                    # cluster, task definition, service, security group
 │   ├── secrets.tf                # app-config secret + version
 │   ├── ecr.tf                    # image repository + lifecycle policy
@@ -87,26 +90,41 @@ reader (see *Rotating credentials*) and move on.
 │   └── tests/plan.tftest.hcl     # offline plan via the mock provider
 ├── bootstrap-ci/                 # ONE-TIME admin bootstrap: the two CI identities
 │   ├── main.tf                   #   reader + deploy users, policies, credentials secret
+│   ├── versions.tf               #   provider + version config
 │   ├── terraform.tfvars          #   filled in, git-ignored
 │   └── tests/plan.tftest.hcl     #   offline plan via the mock provider
 ├── scripts/
 │   ├── register-ci-identity.ps1  # one command: apply bootstrap + upload the reader key
 │   ├── broker-aws-credentials.sh # runs ON THE RUNNER: fetches the deploy key
 │   └── setup-github-env.ps1      # environment + repository variables
-└── .github/workflows/deploy.yml
+└── .github/workflows/deploy.yml  # build + push to ECR only (no deploy)
 ```
 
 ---
 
 # Setup
 
-Three commands. The first needs AWS admin credentials on your machine; the other two need
-nothing.
-
-## 1. Create the CI identities (once, with admin credentials)
+## 1. Push it
 
 ```powershell
-aws configure            # or: aws login
+git push origin main
+```
+
+The **build** job runs immediately and needs nothing from AWS: it builds the image, runs
+it, and curls `/health` until the container answers. On a pull request that is all that
+happens.
+
+On `main`, the **push** job then publishes the image to ECR. It is skipped automatically
+if the reader secret has not been registered yet, so the build job always gives you a
+green signal.
+
+## 2. Publish the image to ECR (optional, once)
+
+The push job needs the Secrets Manager broker, which needs a one-time bootstrap with AWS
+admin credentials:
+
+```powershell
+aws configure                 # or: aws login
 aws sts get-caller-identity   # must print 008971661427
 .\scripts\register-ci-identity.ps1
 ```
@@ -119,26 +137,26 @@ That command:
    `SM_READER_SECRET_ACCESS_KEY`;
 3. sets the `CI_CREDENTIALS_SECRET_ARN` repository variable.
 
-It refuses to run against any account other than `008971661427`.
+It refuses to run against any account other than `008971661427`. Until you run it, the
+`push` job is skipped and the pipeline still succeeds.
 
-## 2. GitHub environment — this is the approval gate
+## 3. Deploy the stack (when you want to)
 
-Repo → **Settings → Environments → `production`** → **Deployment protection rules** →
-**Required reviewers** → add yourself.
-
-> The GitHub API rejects PATs for this step (`422 App not installed on organization`),
-> so it has to be done in the UI. `setup-github-env.ps1` reports whether it is missing.
-
-Optionally limit **Deployment branches and tags** to `main`.
-
-## 3. Push it
+Nothing in the pipeline deploys. The ECS cluster, task definition, service and secret are
+created by Terraform, run deliberately by you:
 
 ```powershell
-git push origin main
+cd terraform
+terraform init
+terraform plan
+terraform apply
 ```
 
-The run builds, pushes to ECR, plans, then parks on **"Waiting for approval"**. Approve it
-and the apply runs, followed by a smoke test against the task's public IP.
+Once the service exists, pick up a newly pushed image with:
+
+```powershell
+aws ecs update-service --cluster sample-app --service sample-app --force-new-deployment
+```
 
 ---
 
@@ -167,8 +185,8 @@ secrets = [
 The ECS agent resolves those at task start using the **execution role**, so the values
 never appear in the task definition, the image, or the plan output.
 
-To change a value, edit `var.app_config`, push, and approve — a new secret version is
-written and the task definition rolls.
+To change a value, edit `var.app_config` and run `terraform apply` — a new secret version
+is written and the task definition rolls on the next deployment.
 
 Verify what the container actually received:
 
@@ -306,10 +324,11 @@ A `ResourceInitializationError: unable to pull secrets` line means the execution
 `ReadAppConfig` policy does not cover the secret ARN. Both roles carry that policy now, so
 this usually means the stack was applied from a stale plan.
 
-### The apply never pauses for approval
+### The `push` job is skipped
 
-The environment protection rule is missing. Repo → **Settings → Environments** →
-`production` → **Deployment protection rules** → **Required reviewers**. UI only.
+Two reasons, both benign: the run was a pull request, or `CI_CREDENTIALS_SECRET_ARN` is not
+set yet. Run `register-ci-identity.ps1` to enable it. The `build` job is the real gate and
+runs regardless.
 
 ### `/info` shows `"source": "none"`
 
