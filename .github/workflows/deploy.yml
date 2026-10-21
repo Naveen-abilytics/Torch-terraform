@@ -36,6 +36,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Show OIDC token claims
+        if: ${{ vars.AWS_AUTH_MODE != 'static' }}
+        run: |
+          echo "::group::GitHub OIDC token claims"
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "could not mint an OIDC token - check the id-token: write permission"
+          else
+            echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
+              | jq '{sub, aud, ref, environment, repository, event_name}'
+            echo "The 'sub' above must be listed in the role trust policy."
+          fi
+          echo "::endgroup::"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -144,6 +159,21 @@ jobs:
       name: production
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show OIDC token claims
+        if: ${{ vars.AWS_AUTH_MODE != 'static' }}
+        run: |
+          echo "::group::GitHub OIDC token claims"
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "could not mint an OIDC token - check the id-token: write permission"
+          else
+            echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
+              | jq '{sub, aud, ref, environment, repository, event_name}'
+            echo "The 'sub' above must be listed in the role trust policy."
+          fi
+          echo "::endgroup::"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4

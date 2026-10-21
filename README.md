@@ -260,7 +260,7 @@ backups, and are painful to rotate.
     "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
     "StringLike": {
       "token.actions.githubusercontent.com:sub": [
-        "repo:<org>/<repo>:branch:main",
+        "repo:<org>/<repo>:ref:refs/heads/main",
         "repo:<org>/<repo>:environment:production"
       ]
     }
@@ -272,8 +272,15 @@ The `sub` claim is what binds a run to a job:
 
 | Job | `sub` claim | Consequence |
 |---|---|---|
-| `build` | `repo:org/repo:branch:main` | Can build, push and **plan** |
+| `build` | `repo:org/repo:ref:refs/heads/main` | Can build, push and **plan** |
 | `deploy` | `repo:org/repo:environment:production` | Can **apply** — and the environment only grants that `sub` *after* a reviewer approves |
+
+> **There is no `:branch:` subject in GitHub OIDC.** A branch push presents
+> `repo:<org>/<repo>:ref:refs/heads/<branch>`. A trust policy listing
+> `repo:<org>/<repo>:branch:main` will fail with
+> `Not authorized to perform sts:AssumeRoleWithWebIdentity`.
+> The workflow prints the live `sub` claim in the **Show OIDC token claims** step
+> so you can compare it against the trust policy at a glance.
 
 So the approval gate is enforced twice: by GitHub (the environment protection rule) and
 by AWS (the trust policy will not issue credentials to an unapproved subject).

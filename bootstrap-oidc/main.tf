@@ -5,8 +5,12 @@
 # credentials. No AWS access key ever exists in GitHub secrets.
 #
 # The trust policy allows exactly two subjects:
-#   repo:<org>/<repo>:branch:<branch>       -> the build/plan job
-#   repo:<org>/<repo>:environment:<env>      -> the deploy job (post-approval)
+#   repo:<org>/<repo>:ref:refs/heads/<branch>   -> the build/plan job
+#   repo:<org>/<repo>:environment:<env>         -> the deploy job (post-approval)
+#
+# Note: GitHub OIDC has no ":branch:" subject. A push to a branch presents
+# "repo:<org>/<repo>:ref:refs/heads/<branch>"; a job bound to an environment
+# presents "repo:<org>/<repo>:environment:<env>".
 # ---------------------------------------------------------------------------
 
 data "aws_caller_identity" "current" {}
@@ -41,7 +45,7 @@ locals {
   )
 
   github_subjects = [
-    "repo:${var.github_org}/${var.github_repo}:branch:${var.github_branch}",
+    "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/${var.github_branch}",
     "repo:${var.github_org}/${var.github_repo}:environment:${var.github_environment}",
   ]
 

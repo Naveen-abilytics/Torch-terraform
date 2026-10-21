@@ -45,8 +45,13 @@ run "plan_with_existing_provider" {
   }
 
   assert {
-    condition     = strcontains(aws_iam_role.github_actions[0].assume_role_policy, "repo:acme/demo:branch:main")
-    error_message = "The trust policy must allow the build branch subject."
+    condition     = strcontains(aws_iam_role.github_actions[0].assume_role_policy, "repo:acme/demo:ref:refs/heads/main")
+    error_message = "The trust policy must allow the build branch subject (repo:ORG/REPO:ref:refs/heads/BRANCH)."
+  }
+
+  assert {
+    condition     = !strcontains(aws_iam_role.github_actions[0].assume_role_policy, ":branch:")
+    error_message = "GitHub OIDC has no ':branch:' subject - a branch push presents ':ref:refs/heads/BRANCH'."
   }
 
   assert {
