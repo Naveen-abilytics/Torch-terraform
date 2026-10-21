@@ -1,0 +1,203 @@
+name: Build & Deploy (ECS Fargate)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "terraform/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (leave empty to use the commit SHA)"
+        required: false
+        type: string
+
+# OIDC: no static AWS access keys anywhere in this workflow.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: ecs-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'sample-app' }}
+
+jobs:
+  build:
+    name: Build image & plan
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          audience: sts.amazonaws.com
+
+      - name: Resolve AWS account id
+        id: aws
+        run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: true
+
+      # No S3 backend: the state file is carried between runs in the GitHub
+      # Actions cache. Prefix order matters - the "final" cache wins.
+      - name: Restore Terraform state
+        uses: actions/cache/restore@v4
+        with:
+          path: terraform/terraform.tfstate
+          key: tfstate-${{ github.run_id }}
+          restore-keys: |
+            tfstate-final-
+            tfstate-
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      # The ECS service can only reference an image that already exists in
+      # ECR, so the repository is created before the image is pushed.
+      - name: Bootstrap ECR repository
+        working-directory: terraform
+        run: terraform apply -input=false -auto-approve -target=aws_ecr_repository.app
+
+      - name: Save Terraform state
+        uses: actions/cache/save@v4
+        with:
+          path: terraform/terraform.tfstate
+          key: tfstate-${{ github.run_id }}
+
+      - name: Docker login to ECR
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin \
+              "${{ steps.aws.outputs.account_id }}.dkr.ecr.$AWS_REGION.amazonaws.com"
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [ -z "$TAG" ]; then TAG="${GITHUB_SHA::12}"; fi
+          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+          TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          IMAGE="$ECR_REPOSITORY:$TAG"
+          docker build -t "$IMAGE" app/
+          docker tag "$IMAGE" "$ECR_REPOSITORY:latest"
+          docker push "$IMAGE"
+          docker push "$ECR_REPOSITORY:latest"
+
+      - name: Terraform plan
+        working-directory: terraform
+        env:
+          TF_VAR_image_tag: ${{ steps.tag.outputs.image_tag }}
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Summarise plan
+        working-directory: terraform
+        run: |
+          {
+            echo "### Terraform plan"
+            echo '```'
+            terraform show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: terraform/tfplan
+          retention-days: 7
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy (needs approval)
+    needs: build
+    runs-on: ubuntu-latest
+    # The environment is where the manual approval gate lives.
+    # Settings -> Environments -> production -> Deployment protection rules ->
+    # Required reviewers. The job parks in "Waiting for approval" until you approve.
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          audience: sts.amazonaws.com
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: true
+
+      - name: Restore Terraform state
+        uses: actions/cache/restore@v4
+        with:
+          path: terraform/terraform.tfstate
+          key: tfstate-${{ github.run_id }}
+          restore-keys: |
+            tfstate-final-
+            tfstate-
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: terraform
+
+      - name: Terraform apply (saved plan)
+        working-directory: terraform
+        run: terraform apply -input=false tfplan
+
+      - name: Persist Terraform state
+        uses: actions/cache/save@v4
+        with:
+          path: terraform/terraform.tfstate
+          key: tfstate-final-${{ github.run_id }}
+
+      - name: Read outputs
+        id: outputs
+        working-directory: terraform
+        run: |
+          echo "cluster=$(terraform output -raw ecs_cluster_name)" >> "$GITHUB_OUTPUT"
+          echo "service=$(terraform output -raw ecs_service_name)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        env:
+          CLUSTER: ${{ steps.outputs.outputs.cluster }}
+          SERVICE: ${{ steps.outputs.outputs.service }}
+        run: |
+          set -euo pipefail
+          TASK=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
+            --query 'taskArns[0]' --output text)
+          IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+            --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[?name=='privateIPv4'].value | [0]" --output text)
+          echo "Task $TASK is on $IP"
+          curl --retry 12 --retry-delay 5 --retry-all-errors --fail "http://$IP:8080/health"
+          echo ""
+          echo "### App is live at http://$IP:8080" >> "$GITHUB_STEP_SUMMARY"

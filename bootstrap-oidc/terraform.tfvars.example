@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and fill in.
+github_org  = "your-github-org"
+github_repo = "your-repo-name"
+
+aws_region = "us-east-1"
+
+# Must match the main stack.
+app_name           = "sample-app"
+ecr_repository_name = "sample-app"
+
+github_branch      = "main"
+github_environment = "production"
