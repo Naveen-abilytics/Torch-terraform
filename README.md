@@ -56,7 +56,8 @@ main ──► [build & plan]  (runs on every push, no approval needed)
 │   ├── terraform.tfvars    #   set github_org + github_repo (git-ignored)
 │   └── tests/              #   offline plan via the mock provider
 ├── scripts/
-│   └── setup-github-env.ps1#   creates the environment + repo variables
+│   ├── setup-github-env.ps1   # creates the environment + repo variables
+│   └── setup-github-secrets.ps1# uploads AWS keys as secrets, sets AWS_AUTH_MODE=static
 └── .github/workflows/deploy.yml
 ```
 
@@ -64,33 +65,146 @@ main ──► [build & plan]  (runs on every push, no approval needed)
 
 # Setup
 
-## 1. One-time: create the GitHub OIDC role (admin, local AWS credentials)
+There are **two** ways to authenticate GitHub Actions to AWS. Both are supported by the
+same workflow — the `AWS_AUTH_MODE` repository variable picks between them.
 
-GitHub Actions must be able to reach AWS *before* the workflow can run, so the role is
-bootstrapped out of band. Run this once, from a machine with working AWS credentials:
+| | Method A — OIDC (recommended) | Method B — static secret |
+|---|---|---|
+| GitHub stores | nothing | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| Credential lifetime | ~1 hour, minted per run | long-lived, until rotated |
+| Needs an AWS role | yes | an IAM user |
+| `AWS_AUTH_MODE` | `oidc` (default) | `static` |
+| Extra setup | register the OIDC provider | create an IAM user + key |
+
+**Method B is the escape hatch.** If the OIDC provider cannot be registered in your
+account, or you just want to get moving, use it — the pipeline behaves identically.
+
+## 1. Create the CI identity in AWS (admin, local AWS credentials)
+
+Both methods start here. `bootstrap-oidc/` creates the OIDC role and, optionally, a
+scoped IAM user for Method B. They share one permissions policy.
 
 ```bash
 cd bootstrap-oidc
 terraform init
+terraform plan
 terraform apply
 ```
 
-`terraform.tfvars` already exists — edit it and set `github_org` + `github_repo` to your
-repo. It currently has `create_oidc_provider = false`, which tells Terraform that your
-account **already** has the GitHub OIDC provider registered, so it will not try to create
-it and will reference the existing provider by ARN instead.
+`terraform.tfvars` already exists and is pre-filled for this repo
+(`Naveen-abilytics/Torch-terraform`, account `008971661427`). Edit it if needed:
 
-It creates:
+```hcl
+github_org   = "Naveen-abilytics"
+github_repo  = "Torch-terraform"
+aws_region   = "us-east-1"
+expected_account_id = "008971661427"   # guard: refuses to run against another account
+```
 
-* `aws_iam_role.github_actions` — trust policy scoped to exactly two subjects
-* a scoped inline policy (ECR / ECS / Logs / IAM on the two ECS roles only)
+### Method A — OIDC
 
-Output `role_arn` → this is the value of the GitHub variable `AWS_ROLE_ARN`.
+```hcl
+create_oidc_provider = true   # let Terraform register the provider
+create_static_user   = false
+```
 
-> If your account does **not** already have the provider, flip `create_oidc_provider` back
-> to `true` in `terraform.tfvars` and Terraform will create it for you.
+Apply creates the OIDC provider, the role `github-actions-ecs-deploy`, and the shared
+permissions policy. Take the `role_arn` output → that is `AWS_ROLE_ARN`.
 
-### The OIDC method in detail
+> **`create_oidc_provider = false`** means "the account already has the provider". If the
+> account does **not** have it, the role creation fails with:
+> `Invalid principal: OIDC provider token.actions.githubusercontent.com does not exist`.
+> That is the "still asking for an OIDC provider" symptom — flip it back to `true`.
+
+### Method B — static secret
+
+```hcl
+create_oidc_provider = false  # OIDC is not used at all in this mode
+create_static_user   = true
+```
+
+Apply creates the IAM user `github-actions-ecs`, attaches the same scoped policy, and
+generates an access key. Take `static_access_key_id` and `static_secret_access_key` from
+the outputs.
+
+## 2. GitHub: secrets and variables
+
+### Method A (OIDC) — variables only, no secrets
+
+Repo → **Settings → Secrets and variables → Actions → Variables**:
+
+| Name | Value |
+|---|---|
+| `AWS_ROLE_ARN` | `arn:aws:iam::008971661427:role/github-actions-ecs-deploy` |
+| `AWS_REGION` | `us-east-1` |
+| `ECR_REPOSITORY` | `sample-app` |
+| `AWS_AUTH_MODE` | `oidc` |
+
+### Method B (static secret) — one secret, plus variables
+
+Repo → **Settings → Secrets and variables → Actions → Secrets** → *New repository secret*:
+
+| Name | Value |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | from `static_access_key_id` |
+| `AWS_SECRET_ACCESS_KEY` | from `static_secret_access_key` |
+
+*(`AWS_SESSION_TOKEN` is optional — only needed for temporary/SSO credentials.)*
+
+Repo → **Variables**:
+
+| Name | Value |
+|---|---|
+| `AWS_AUTH_MODE` | `static` |
+| `AWS_REGION` | `us-east-1` |
+| `ECR_REPOSITORY` | `sample-app` |
+
+Or do it in one command — it reads the key pair from `%USERPROFILE%\.aws\credentials`,
+uploads both secrets, and sets `AWS_AUTH_MODE=static`:
+
+```powershell
+.\scripts\setup-github-secrets.ps1
+```
+
+Secrets are write-only: GitHub encrypts them with the repository's public key, so they
+can never be read back — not by you, not by GitHub, not by the script.
+
+### Automation
+
+```powershell
+# environment + variables (both methods)
+.\scripts\setup-github-env.ps1 -AwsRoleArn arn:aws:iam::008971661427:role/github-actions-ecs-deploy
+
+# secrets + AWS_AUTH_MODE=static
+.\scripts\setup-github-secrets.ps1
+```
+
+## 3. GitHub environment — this is the approval gate
+
+Repo → **Settings → Environments → New environment** → name it `production`
+(this must match `github_environment` in the bootstrap and `environment:` in the workflow).
+
+Then, in the environment:
+
+1. **Deployment protection rules → Required reviewers** → add yourself.
+2. *(optional)* **Deployment branches and tags** → limit to `main`.
+
+With a required reviewer set, the `deploy` job stops at `Waiting for approval` and shows
+an **Approve and deploy** button. Nobody — including you — can bypass it except by
+disabling the protection rule.
+
+> The environment and the repository variables can be created automatically:
+>
+> ```powershell
+> # after the bootstrap, so AWS_ROLE_ARN can be registered too
+> .\scripts\setup-github-env.ps1 -AwsRoleArn arn:aws:iam::123456789012:role/github-actions-ecs-deploy
+> ```
+>
+> The **required reviewer** still has to be added in the UI: GitHub's API for that rule
+> only accepts GitHub App requests, so a personal access token gets
+> `422 App not installed on organization`. The script prints a reminder.
+
+### Method A in detail — how OIDC works
 
 **The problem it solves.** The classic setup stores `AWS_ACCESS_KEY_ID` /
 `AWS_SECRET_ACCESS_KEY` in GitHub Secrets. Those are long-lived, leak from logs and

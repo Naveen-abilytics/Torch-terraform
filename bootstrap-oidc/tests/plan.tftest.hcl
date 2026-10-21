@@ -54,6 +54,45 @@ run "plan_with_existing_provider" {
   }
 }
 
+# Static-credentials mode: an IAM user with an access key, sharing the same
+# scoped policy as the OIDC role.
+run "plan_with_static_user" {
+  command = plan
+
+  variables {
+    aws_region           = "us-east-1"
+    github_org           = "acme"
+    github_repo          = "demo"
+    create_oidc_provider = false
+    create_static_user   = true
+  }
+
+  assert {
+    condition     = length(aws_iam_user.ci) == 1
+    error_message = "The static CI user should be created."
+  }
+
+  assert {
+    condition     = length(aws_iam_access_key.ci) == 1
+    error_message = "An access key should be generated for the static CI user."
+  }
+
+  assert {
+    condition     = length(aws_iam_user_policy_attachment.ci_user) == 1
+    error_message = "The static user must get the scoped CI policy attached."
+  }
+
+  assert {
+    condition     = aws_iam_policy.ci_permissions.name == "ecs-deploy-permissions"
+    error_message = "The shared scoped policy must exist."
+  }
+
+  assert {
+    condition     = aws_iam_role_policy_attachment.ci_role.role == "github-actions-ecs-deploy"
+    error_message = "The OIDC role must get the shared scoped policy attached."
+  }
+}
+
 # Fresh account: Terraform creates the OIDC provider itself.
 run "plan_creating_provider" {
   command = plan

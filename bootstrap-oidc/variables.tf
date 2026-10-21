@@ -58,7 +58,27 @@ variable "create_oidc_provider" {
     Set to false if the account already has the GitHub OIDC provider registered.
     Terraform will then leave the provider alone and reference the existing one
     by ARN in the role's trust policy. No import is needed in that mode.
+
+    If creating the role fails with "Invalid principal: OIDC provider
+    token.actions.githubusercontent.com does not exist", the account does NOT
+    have the provider - set this back to true.
   EOT
   type        = bool
   default     = true
+}
+
+variable "create_static_user" {
+  description = <<-EOT
+    Create a scoped IAM user with a long-lived access key, for the
+    "static credentials" auth mode (AWS_AUTH_MODE=static). Off by default.
+    The key is stored in the Terraform state - it is a sample, not production.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "static_user_name" {
+  description = "Name of the optional static-credentials IAM user."
+  type        = string
+  default     = "github-actions-ecs"
 }

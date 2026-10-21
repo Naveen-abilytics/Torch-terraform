@@ -195,8 +195,40 @@ resource "aws_iam_role" "github_actions" {
   tags                 = { ManagedBy = "terraform", Project = var.app_name }
 }
 
-resource "aws_iam_role_policy" "ci_permissions" {
-  name   = "ecs-deploy-permissions"
-  role   = aws_iam_role.github_actions.id
-  policy = local.ci_permissions_policy
+# One standalone policy, shared by the OIDC role and the optional static user.
+resource "aws_iam_policy" "ci_permissions" {
+  name        = "ecs-deploy-permissions"
+  description = "ECR / ECS / Logs / IAM permissions for the ${var.app_name} CI identity."
+  policy      = local.ci_permissions_policy
+  tags        = { ManagedBy = "terraform", Project = var.app_name }
+}
+
+resource "aws_iam_role_policy_attachment" "ci_role" {
+  role       = aws_iam_role.github_actions.name
+  policy_arn = aws_iam_policy.ci_permissions.arn
+}
+
+# ---------------------------------------------------------------------------
+# Optional: a scoped IAM user with a long-lived access key, for the
+# "static credentials" auth mode. Same permissions as the role above.
+# ---------------------------------------------------------------------------
+
+resource "aws_iam_user" "ci" {
+  count = var.create_static_user ? 1 : 0
+
+  name = var.static_user_name
+  tags = { ManagedBy = "terraform", Project = var.app_name }
+}
+
+resource "aws_iam_user_policy_attachment" "ci_user" {
+  count = var.create_static_user ? 1 : 0
+
+  user       = aws_iam_user.ci[0].name
+  policy_arn = aws_iam_policy.ci_permissions.arn
+}
+
+resource "aws_iam_access_key" "ci" {
+  count = var.create_static_user ? 1 : 0
+
+  user = aws_iam_user.ci[0].name
 }
