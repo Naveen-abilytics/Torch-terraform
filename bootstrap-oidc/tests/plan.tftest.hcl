@@ -6,7 +6,7 @@ mock_provider "aws" {}
 override_data {
   target = data.aws_caller_identity.current
   values = {
-    account_id = "123456789012"
+    account_id = "008971661427"
   }
 }
 
@@ -18,6 +18,7 @@ run "plan_with_existing_provider" {
   variables {
     aws_region           = "us-east-1"
     github_org           = "acme"
+    expected_account_id  = "008971661427"
     github_repo          = "demo"
     create_oidc_provider = false
   }
@@ -60,6 +61,7 @@ run "plan_creating_provider" {
   variables {
     aws_region           = "us-east-1"
     github_org           = "acme"
+    expected_account_id  = "008971661427"
     github_repo          = "demo"
     create_oidc_provider = true
   }

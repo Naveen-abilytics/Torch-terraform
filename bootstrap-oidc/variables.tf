@@ -4,6 +4,15 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "expected_account_id" {
+  description = <<-EOT
+    Safety guard. The bootstrap refuses to create the OIDC role against a
+    different AWS account than the one the pipeline expects.
+  EOT
+  type        = string
+  default     = "008971661427"
+}
+
 variable "github_org" {
   description = "GitHub organisation or user that owns the repo."
   type        = string

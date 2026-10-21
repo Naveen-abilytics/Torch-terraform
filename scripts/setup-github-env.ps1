@@ -66,8 +66,8 @@ if ($r.Ok) {
 # context, so a PAT cannot create it. This step reports the state and points at
 # the UI. See README "Step 4".
 $r = Invoke-Gh -Method Get -Uri "$api/environments/$Environment/deployment_protection_rules"
-if ($r.Ok -and @($r.Data).Count -gt 0) {
-  Write-Host "Protection rules present: $((@($r.Data) | ForEach-Object { $_.type }) -join ', ')"
+if ($r.Ok -and $r.Data.total_count -gt 0) {
+  Write-Host "Protection rules present: $((@($r.Data.custom_deployment_protection_rules) | ForEach-Object { $_.type }) -join ', ')"
 } else {
   Write-Host "ACTION REQUIRED: add a required reviewer in the UI -"
   Write-Host "  Repo -> Settings -> Environments -> $Environment -> Deployment protection rules -> Required reviewers"

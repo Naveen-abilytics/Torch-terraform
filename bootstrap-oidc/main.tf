@@ -11,6 +11,14 @@
 
 data "aws_caller_identity" "current" {}
 
+# Guard against running the bootstrap against the wrong AWS account.
+check "expected_account_id" {
+  assert {
+    condition     = data.aws_caller_identity.current.account_id == var.expected_account_id
+    error_message = "Connected to account ${data.aws_caller_identity.current.account_id}, but this bootstrap is pinned to ${var.expected_account_id}."
+  }
+}
+
 locals {
   account_id = data.aws_caller_identity.current.account_id
 
