@@ -96,7 +96,7 @@ reader (see *Rotating credentials*) and move on.
 ├── scripts/
 │   ├── register-ci-identity.ps1  # one command: apply bootstrap + upload the reader key
 │   ├── broker-aws-credentials.sh # runs ON THE RUNNER: fetches the deploy key
-│   └── setup-github-env.ps1      # environment + repository variables
+│   └── setup-github-env.ps1      # repository variables (+ optional environment)
 └── .github/workflows/deploy.yml  # build + push to ECR only (no deploy)
 ```
 
@@ -329,6 +329,21 @@ this usually means the stack was applied from a stale plan.
 Two reasons, both benign: the run was a pull request, or `CI_CREDENTIALS_SECRET_ARN` is not
 set yet. Run `register-ci-identity.ps1` to enable it. The `build` job is the real gate and
 runs regardless.
+
+### A re-run shows an error the current code cannot produce
+
+**"Re-run all jobs" replays the workflow file from the run's original commit**, not from
+`main`. A run started before the rewrite will keep failing the same way, forever, no matter
+what you push:
+
+```
+Not authorized to perform sts:AssumeRoleWithWebIdentity
+```
+
+That message is from the retired OIDC workflow. Check the commit the run used
+(`gh run view <id> --json headSha`) before believing it. To test the current code, push a
+commit or use **Actions → Build (ECS Fargate image) → Run workflow** on `main`; do not
+re-run an old run.
 
 ### `/info` shows `"source": "none"`
 

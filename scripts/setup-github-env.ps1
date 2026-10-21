@@ -1,17 +1,21 @@
 <#
 .SYNOPSIS
-  Configures the GitHub side of the deployment pipeline.
+  Configures the GitHub side of the build pipeline.
 
 .DESCRIPTION
-  Creates the "production" deployment environment and the repository variables the
-  workflow reads, using a token from the Git Credential Manager (the same one git
-  already uses for push). No secret is written to disk by this script.
+  Sets the repository variables the workflow reads, using a token from the Git
+  Credential Manager (the same one git already uses for push). No secret is
+  written to disk by this script.
 
   The pipeline holds no AWS credentials. It brokers them out of AWS Secrets
   Manager at runtime, so all this script needs to do is point the workflow at
   the secret that holds the deploy key:
 
     .\scripts\setup-github-env.ps1 -CiCredentialsSecretArn arn:aws:secretsmanager:us-east-1:008971661427:secret:sample-app/ci-credentials-AbCdEf
+
+  The pipeline builds and pushes an image; it never deploys. There is therefore
+  no deployment environment and no approval gate. Pass -CreateEnvironment only
+  if you later add a deploy job and want the environment to exist.
 
 .EXAMPLE
   .\scripts\setup-github-env.ps1
@@ -21,7 +25,8 @@ param(
   [string]$Environment = "production",
   [string]$AwsRegion = "us-east-1",
   [string]$EcrRepository = "sample-app",
-  [string]$CiCredentialsSecretArn = ""
+  [string]$CiCredentialsSecretArn = "",
+  [switch]$CreateEnvironment
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,23 +61,20 @@ function Invoke-Gh {
 $api = "https://api.github.com/repos/$Repo"
 
 # --- environment -----------------------------------------------------------
-$r = Invoke-Gh -Method Put -Uri "$api/environments/$Environment" -Body @{}
-if ($r.Ok) {
-  Write-Host "Environment '$Environment' ready (id $($r.Data.id))."
+# Only needed once a deploy job exists. The current pipeline builds and pushes
+# an image and never deploys, so the environment is off by default.
+if ($CreateEnvironment) {
+  $r = Invoke-Gh -Method Put -Uri "$api/environments/$Environment" -Body @{}
+  if ($r.Ok) {
+    Write-Host "Environment '$Environment' ready (id $($r.Data.id))."
+    Write-Host "To gate deployments on it, add a required reviewer in the UI:"
+    Write-Host "  Repo -> Settings -> Environments -> $Environment -> Deployment protection rules -> Required reviewers"
+  } else {
+    Write-Host "Environment '$Environment' FAILED: $($r.Data)"
+  }
 } else {
-  Write-Host "Environment '$Environment' FAILED: $($r.Data)"
-}
-
-# --- deployment protection rule --------------------------------------------
-# The GitHub API for required reviewers only accepts requests from a GitHub App
-# context, so a PAT cannot create it. This step reports the state and points at
-# the UI. See README "Step 4".
-$r = Invoke-Gh -Method Get -Uri "$api/environments/$Environment/deployment_protection_rules"
-if ($r.Ok -and $r.Data.total_count -gt 0) {
-  Write-Host "Protection rules present: $((@($r.Data.custom_deployment_protection_rules) | ForEach-Object { $_.type }) -join ', ')"
-} else {
-  Write-Host "ACTION REQUIRED: add a required reviewer in the UI -"
-  Write-Host "  Repo -> Settings -> Environments -> $Environment -> Deployment protection rules -> Required reviewers"
+  Write-Host "Skipping the '$Environment' environment: this pipeline does not deploy."
+  Write-Host "Pass -CreateEnvironment to create it anyway."
 }
 
 # --- repository variables --------------------------------------------------

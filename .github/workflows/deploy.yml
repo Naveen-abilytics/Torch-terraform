@@ -135,9 +135,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: terraform/terraform.tfstate
-          key: tfstate-${{ github.run_id }}
+          key: tfstate-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            tfstate-final-
             tfstate-
 
       - name: Terraform init
@@ -147,6 +146,14 @@ jobs:
       - name: Ensure the ECR repository exists
         working-directory: terraform
         run: terraform apply -input=false -auto-approve -target=aws_ecr_repository.app
+
+      # The state must be carried forward, otherwise the next run starts from an
+      # empty state and tries to create the repository a second time.
+      - name: Save Terraform state
+        uses: actions/cache/save@v4
+        with:
+          path: terraform/terraform.tfstate
+          key: tfstate-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Docker login to ECR
         run: |
