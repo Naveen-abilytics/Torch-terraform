@@ -43,6 +43,16 @@ output "subnet_ids" {
   value       = local.subnet_ids
 }
 
+output "app_config_secret_arn" {
+  description = "ARN of the Secrets Manager secret holding the app's runtime configuration."
+  value       = aws_secretsmanager_secret.app_config.arn
+}
+
+output "app_config_secret_id" {
+  description = "Secret id of the app configuration secret."
+  value       = aws_secretsmanager_secret.app_config.id
+}
+
 output "public_url_command" {
   description = "Command to print the public URL of the running task."
   value = join(" ", [

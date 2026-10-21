@@ -7,9 +7,11 @@
   workflow reads, using a token from the Git Credential Manager (the same one git
   already uses for push). No secret is written to disk by this script.
 
-  Run it again after the OIDC bootstrap to register AWS_ROLE_ARN:
+  The pipeline holds no AWS credentials. It brokers them out of AWS Secrets
+  Manager at runtime, so all this script needs to do is point the workflow at
+  the secret that holds the deploy key:
 
-    .\scripts\setup-github-env.ps1 -AwsRoleArn arn:aws:iam::123456789012:role/github-actions-ecs-deploy
+    .\scripts\setup-github-env.ps1 -CiCredentialsSecretArn arn:aws:secretsmanager:us-east-1:008971661427:secret:sample-app/ci-credentials-AbCdEf
 
 .EXAMPLE
   .\scripts\setup-github-env.ps1
@@ -19,7 +21,7 @@ param(
   [string]$Environment = "production",
   [string]$AwsRegion = "us-east-1",
   [string]$EcrRepository = "sample-app",
-  [string]$AwsRoleArn = ""
+  [string]$CiCredentialsSecretArn = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,7 +80,9 @@ $vars = @(
   @{ name = "AWS_REGION";     value = $AwsRegion },
   @{ name = "ECR_REPOSITORY"; value = $EcrRepository }
 )
-if ($AwsRoleArn) { $vars += @{ name = "AWS_ROLE_ARN"; value = $AwsRoleArn } }
+if ($CiCredentialsSecretArn) {
+  $vars += @{ name = "CI_CREDENTIALS_SECRET_ARN"; value = $CiCredentialsSecretArn }
+}
 
 foreach ($v in $vars) {
   $existing = Invoke-Gh -Method Get -Uri "$api/actions/variables/$($v.name)"

@@ -6,6 +6,7 @@ on:
     paths:
       - "app/**"
       - "terraform/**"
+      - "scripts/broker-aws-credentials.sh"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
     inputs:
@@ -14,9 +15,9 @@ on:
         required: false
         type: string
 
-# OIDC: no static AWS access keys anywhere in this workflow.
+# No id-token permission: this pipeline does not use OIDC. It brokers its AWS
+# credentials out of AWS Secrets Manager at runtime.
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
@@ -25,6 +26,7 @@ concurrency:
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'sample-app' }}
 
 jobs:
@@ -36,33 +38,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show OIDC token claims
-        if: ${{ vars.AWS_AUTH_MODE != 'static' }}
-        run: |
-          echo "::group::GitHub OIDC token claims"
-          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
-          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-            echo "could not mint an OIDC token - check the id-token: write permission"
-          else
-            echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
-              | jq '{sub, aud, ref, environment, repository, event_name}'
-            echo "The 'sub' above must be listed in the role trust policy."
-          fi
-          echo "::endgroup::"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          # Auth mode is chosen by the AWS_AUTH_MODE repository variable:
-          #   "oidc"   (default) -> assume the role in vars.AWS_ROLE_ARN
-          #   "static"          -> use the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets
-          role-to-assume: ${{ vars.AWS_AUTH_MODE != 'static' && vars.AWS_ROLE_ARN || '' }}
-          aws-access-key-id: ${{ vars.AWS_AUTH_MODE == 'static' && secrets.AWS_ACCESS_KEY_ID || '' }}
-          aws-secret-access-key: ${{ vars.AWS_AUTH_MODE == 'static' && secrets.AWS_SECRET_ACCESS_KEY || '' }}
-          aws-session-token: ${{ vars.AWS_AUTH_MODE == 'static' && secrets.AWS_SESSION_TOKEN || '' }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-          audience: sts.amazonaws.com
+      # The only credential in GitHub. It can read exactly one secret and
+      # nothing else. The deploy key it unlocks never appears in GitHub.
+      - name: Broker AWS credentials from Secrets Manager
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SM_READER_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SM_READER_SECRET_ACCESS_KEY }}
+          CI_CREDENTIALS_SECRET_ARN: ${{ vars.CI_CREDENTIALS_SECRET_ARN }}
+        run: bash scripts/broker-aws-credentials.sh
 
       - name: Resolve AWS account id
         id: aws
@@ -148,6 +131,12 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+      # Last step of the job: the brokered credentials are wiped off the
+      # runner as soon as the work is done.
+      - name: Scrub brokered credentials
+        if: always()
+        run: rm -f ~/.aws/credentials ~/.aws/config
+
   deploy:
     name: Deploy (needs approval)
     needs: build
@@ -160,31 +149,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show OIDC token claims
-        if: ${{ vars.AWS_AUTH_MODE != 'static' }}
-        run: |
-          echo "::group::GitHub OIDC token claims"
-          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
-          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-            echo "could not mint an OIDC token - check the id-token: write permission"
-          else
-            echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
-              | jq '{sub, aud, ref, environment, repository, event_name}'
-            echo "The 'sub' above must be listed in the role trust policy."
-          fi
-          echo "::endgroup::"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          # Same auth-mode switch as the build job - see AWS_AUTH_MODE.
-          role-to-assume: ${{ vars.AWS_AUTH_MODE != 'static' && vars.AWS_ROLE_ARN || '' }}
-          aws-access-key-id: ${{ vars.AWS_AUTH_MODE == 'static' && secrets.AWS_ACCESS_KEY_ID || '' }}
-          aws-secret-access-key: ${{ vars.AWS_AUTH_MODE == 'static' && secrets.AWS_SECRET_ACCESS_KEY || '' }}
-          aws-session-token: ${{ vars.AWS_AUTH_MODE == 'static' && secrets.AWS_SESSION_TOKEN || '' }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-          audience: sts.amazonaws.com
+      - name: Broker AWS credentials from Secrets Manager
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SM_READER_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SM_READER_SECRET_ACCESS_KEY }}
+          CI_CREDENTIALS_SECRET_ARN: ${{ vars.CI_CREDENTIALS_SECRET_ARN }}
+        run: bash scripts/broker-aws-credentials.sh
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -241,3 +211,9 @@ jobs:
           curl --retry 12 --retry-delay 5 --retry-all-errors --fail "http://$IP:8080/health"
           echo ""
           echo "### App is live at http://$IP:8080" >> "$GITHUB_STEP_SUMMARY"
+
+      # Last step of the job: the brokered credentials are wiped off the
+      # runner as soon as the work is done.
+      - name: Scrub brokered credentials
+        if: always()
+        run: rm -f ~/.aws/credentials ~/.aws/config

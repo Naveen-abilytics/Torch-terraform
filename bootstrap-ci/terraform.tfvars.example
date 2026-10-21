@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars and fill in.
+aws_region = "us-east-1"
+
+# Safety guard: the bootstrap refuses to run against any other AWS account.
+expected_account_id = "008971661427"
+
+# Must match the main stack.
+app_name           = "sample-app"
+ecr_repository_name = "sample-app"
+
+# Where the pipeline's AWS key pair is stored. The pipeline reads this secret
+# at runtime; the key pair never appears in GitHub.
+ci_credentials_secret_name = "sample-app/ci-credentials"
+
+# The identity the pipeline actually deploys with.
+ci_deploy_user_name = "github-actions-ecs-deploy"
+
+# The read-only identity. Its key is the ONLY secret stored in GitHub, and it
+# can read nothing except the credentials secret above.
+ci_reader_user_name = "github-actions-secrets-reader"

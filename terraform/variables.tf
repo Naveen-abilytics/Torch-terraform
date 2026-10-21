@@ -61,6 +61,23 @@ variable "ecs_subnet_ids" {
   default     = []
 }
 
+variable "app_config" {
+  description = <<-EOT
+    Runtime configuration for the application. Written to AWS Secrets Manager
+    and injected into the ECS task through the task definition's `secrets`
+    block, so the values are never baked into the image or passed as plain
+    environment variables.
+
+    Every key becomes an environment variable in the container.
+  EOT
+  type        = map(string)
+  sensitive   = true
+  default = {
+    APP_MESSAGE = "Hello from AWS Secrets Manager"
+    APP_REGION  = "us-east-1"
+  }
+}
+
 variable "tags" {
   description = "Tags applied to every resource."
   type        = map(string)

@@ -34,6 +34,24 @@ override_data {
   }
 }
 
+# The secret ARN and the repository URL are computed, so they are unknown
+# during a plan. Pin them so the injected-value wiring can be asserted.
+override_resource {
+  override_during = plan
+  target          = aws_secretsmanager_secret.app_config
+  values = {
+    arn = "arn:aws:secretsmanager:us-east-1:008971661427:secret:sample-app/app-config-AbCdEf"
+  }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_ecr_repository.app
+  values = {
+    repository_url = "012345678901.dkr.ecr.us-east-1.amazonaws.com/sample-app"
+  }
+}
+
 run "plan" {
   command = plan
 
@@ -60,5 +78,48 @@ run "plan" {
   assert {
     condition     = aws_ecs_service.app.network_configuration[0].assign_public_ip
     error_message = "The task needs a public IP because there is no load balancer."
+  }
+
+  # --- Secrets Manager is the only place the app's config lives -------------
+  assert {
+    condition     = aws_secretsmanager_secret.app_config.name == "sample-app/app-config"
+    error_message = "The app config secret must be named after the app."
+  }
+
+  assert {
+    condition     = jsondecode(aws_secretsmanager_secret_version.app_config.secret_string)["APP_MESSAGE"] == "Hello from AWS Secrets Manager"
+    error_message = "The secret version must carry the app config as JSON."
+  }
+
+  # --- the task definition injects the secret, not a plain env var -----------
+  assert {
+    condition     = length(local.task_secrets) == 2
+    error_message = "Every app config key must be injected into the task."
+  }
+
+  assert {
+    condition     = local.task_secrets[0].name == "APP_MESSAGE"
+    error_message = "The task secrets must be sorted by key."
+  }
+
+  assert {
+    condition     = strcontains(local.task_secrets[0].valueFrom, "::APP_MESSAGE")
+    error_message = "Each injected value must point at a JSON key of the secret."
+  }
+
+  assert {
+    condition     = strcontains(aws_ecs_task_definition.app.container_definitions, "\"secrets\"")
+    error_message = "The container definition must use the secrets block, not plain environment variables."
+  }
+
+  # --- the ECS agent needs permission to resolve the secret ------------------
+  assert {
+    condition     = strcontains(aws_iam_role_policy.execution_secrets.policy, "secretsmanager:GetSecretValue")
+    error_message = "The execution role must be allowed to read the app config secret."
+  }
+
+  assert {
+    condition     = strcontains(aws_iam_role_policy.task_secrets.policy, "secretsmanager:GetSecretValue")
+    error_message = "The task role must be allowed to read the app config secret."
   }
 }

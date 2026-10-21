@@ -22,6 +22,17 @@ resource "aws_ecs_cluster" "app" {
   tags = var.tags
 }
 
+locals {
+  # Each key in var.app_config is injected as its own environment variable in
+  # the container. ECS resolves the value from Secrets Manager at task start.
+  task_secrets = [
+    for key in sort(keys(var.app_config)) : {
+      name      = key
+      valueFrom = "${aws_secretsmanager_secret.app_config.arn}::${key}"
+    }
+  ]
+}
+
 resource "aws_ecs_task_definition" "app" {
   family                   = var.app_name
   requires_compatibilities = ["FARGATE"]
@@ -55,8 +66,12 @@ resource "aws_ecs_task_definition" "app" {
         {
           name  = "SERVICE_NAME"
           value = var.app_name
-        }
+        },
       ]
+
+      # Values come from AWS Secrets Manager, resolved by the ECS agent using
+      # the execution role. They are never in the task definition itself.
+      secrets = local.task_secrets
 
       logConfiguration = {
         logDriver = "awslogs"
