@@ -188,15 +188,32 @@ Repo → **Variables**:
 | `AWS_REGION` | `us-east-1` |
 | `ECR_REPOSITORY` | `sample-app` |
 
-Or do it in one command — it reads the key pair from `%USERPROFILE%\.aws\credentials`,
-uploads both secrets, and sets `AWS_AUTH_MODE=static`:
+Or do the whole thing in **one command** — it applies the bootstrap in static mode,
+reads the *scoped* CI key out of the Terraform outputs, uploads both secrets, and sets
+`AWS_AUTH_MODE=static`:
 
 ```powershell
 .\scripts\setup-github-secrets.ps1
 ```
 
+Add `-ShowCredentials` if you also want a copy of the key printed for your records.
+
+> The script uploads the **scoped CI user** key that the bootstrap creates — never your
+> personal admin key. It deliberately does not read a key out of
+> `%USERPROFILE%\.aws\credentials`, because that would hand your whole AWS account to
+> every workflow run.
+>
+> It also refuses to run if the active AWS credentials belong to an account other than
+> `008971661427`.
+
 Secrets are write-only: GitHub encrypts them with the repository's public key, so they
 can never be read back — not by you, not by GitHub, not by the script.
+
+> **The OIDC provider ARN is not a GitHub secret.** It belongs in the **role's trust
+> policy** in AWS, and nothing else. Putting it in a secret (or in `AWS_ROLE_ARN`)
+> does not help — `role-to-assume` needs the **role** ARN
+> (`arn:aws:iam::008971661427:role/github-actions-ecs-deploy`), and the provider ARN
+> only ever appears inside the trust policy that AWS evaluates.
 
 ### Automation
 
@@ -204,7 +221,7 @@ can never be read back — not by you, not by GitHub, not by the script.
 # environment + variables (both methods)
 .\scripts\setup-github-env.ps1 -AwsRoleArn arn:aws:iam::008971661427:role/github-actions-ecs-deploy
 
-# secrets + AWS_AUTH_MODE=static
+# bootstrap in static mode + upload the key pair + AWS_AUTH_MODE=static
 .\scripts\setup-github-secrets.ps1
 ```
 
@@ -385,5 +402,64 @@ Tear down: `terraform destroy` in `terraform/`.
 * **`-target=aws_ecr_repository.app`** in the workflow is deliberate: an ECS service can
   only reference an image that already exists in ECR, so the repository is created first,
   the image is pushed, and only then does the full plan run.
-#   T o r c h - t e r r a f o r m  
- 
+
+---
+
+## Troubleshooting
+
+### `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity`
+
+STS received the token and rejected it. In order of likelihood:
+
+1. **The `sub` claim in the trust policy is wrong.** GitHub OIDC has **no**
+   `:branch:` subject. A push to a branch presents
+   `repo:<org>/<repo>:ref:refs/heads/<branch>`. The workflow's **Show OIDC token
+   claims** step prints the live `sub` — compare it with the trust policy:
+
+   ```powershell
+   aws iam get-role --role-name github-actions-ecs-deploy `
+     --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition.StringLike' --output json
+   ```
+
+2. **The trust policy was edited in AWS but not in Terraform.** Re-apply the
+   bootstrap so the two agree, or Terraform will revert your manual edit on the
+   next apply.
+
+3. **The provider ARN is wrong.** The trust policy's `Principal.Federated` must be
+   the provider ARN for *this* account. Verify:
+
+   ```powershell
+   aws iam get-open-id-connect-provider `
+     --open-id-connect-provider-arn arn:aws:iam::008971661427:oidc-provider/token.actions.githubusercontent.com `
+     --query '{Url:Url, ClientIds:ClientIdList}'
+   ```
+
+   `Url` must be `https://token.actions.githubusercontent.com` and `ClientIds` must
+   contain `sts.amazonaws.com`.
+
+4. **The wrong ARN is in `AWS_ROLE_ARN`.** `role-to-assume` needs the **role** ARN
+   (`arn:aws:iam::008971661427:role/github-actions-ecs-deploy`), never the
+   **provider** ARN. The provider ARN only belongs inside the trust policy.
+
+### `Could not load credentials from any providers`
+
+`AWS_AUTH_MODE` is `oidc` but the secrets are missing, or it is `static` but
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are not set. Check both:
+
+```powershell
+gh variable list --repo Naveen-abilytics/Torch-terraform
+gh secret list --repo Naveen-abilytics/Torch-terraform
+```
+
+### `Invalid principal: OIDC provider token.actions.githubusercontent.com does not exist`
+
+The account has no OIDC provider. Either let Terraform create it
+(`create_oidc_provider = true`) or switch to Method B
+(`create_oidc_role = false`, `create_static_user = true`).
+
+### The apply never pauses for approval
+
+The environment protection rule is missing. Repo → **Settings → Environments** →
+`production` → **Deployment protection rules** → **Required reviewers**. The GitHub
+API rejects PATs for this (`422 App not installed on organization`), so it has to be
+done in the UI.
