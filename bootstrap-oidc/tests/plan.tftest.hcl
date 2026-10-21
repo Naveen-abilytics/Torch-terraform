@@ -21,6 +21,7 @@ run "plan_with_existing_provider" {
     expected_account_id  = "008971661427"
     github_repo          = "demo"
     create_oidc_provider = false
+    create_oidc_role     = true
   }
 
   assert {
@@ -29,27 +30,32 @@ run "plan_with_existing_provider" {
   }
 
   assert {
-    condition     = aws_iam_role.github_actions.name == "github-actions-ecs-deploy"
+    condition     = length(aws_iam_role.github_actions) == 1
     error_message = "Expected the GitHub Actions role to be created."
   }
 
   assert {
-    condition     = strcontains(aws_iam_role.github_actions.assume_role_policy, "token.actions.githubusercontent.com")
+    condition     = aws_iam_role.github_actions[0].name == "github-actions-ecs-deploy"
+    error_message = "Expected the GitHub Actions role to be created."
+  }
+
+  assert {
+    condition     = strcontains(aws_iam_role.github_actions[0].assume_role_policy, "token.actions.githubusercontent.com")
     error_message = "The trust policy must reference the GitHub OIDC provider."
   }
 
   assert {
-    condition     = strcontains(aws_iam_role.github_actions.assume_role_policy, "repo:acme/demo:branch:main")
+    condition     = strcontains(aws_iam_role.github_actions[0].assume_role_policy, "repo:acme/demo:branch:main")
     error_message = "The trust policy must allow the build branch subject."
   }
 
   assert {
-    condition     = strcontains(aws_iam_role.github_actions.assume_role_policy, "repo:acme/demo:environment:production")
+    condition     = strcontains(aws_iam_role.github_actions[0].assume_role_policy, "repo:acme/demo:environment:production")
     error_message = "The trust policy must allow the production environment subject."
   }
 
   assert {
-    condition     = strcontains(aws_iam_role.github_actions.assume_role_policy, "sts.amazonaws.com")
+    condition     = strcontains(aws_iam_role.github_actions[0].assume_role_policy, "sts.amazonaws.com")
     error_message = "The trust policy must pin the audience to sts.amazonaws.com."
   }
 }
@@ -88,8 +94,13 @@ run "plan_with_static_user" {
   }
 
   assert {
-    condition     = aws_iam_role_policy_attachment.ci_role.role == "github-actions-ecs-deploy"
-    error_message = "The OIDC role must get the shared scoped policy attached."
+    condition     = length(aws_iam_role.github_actions) == 0
+    error_message = "Static mode must not create an OIDC role."
+  }
+
+  assert {
+    condition     = length(aws_iam_openid_connect_provider.github) == 0
+    error_message = "Static mode must not touch the OIDC provider."
   }
 }
 
@@ -103,6 +114,7 @@ run "plan_creating_provider" {
     expected_account_id  = "008971661427"
     github_repo          = "demo"
     create_oidc_provider = true
+    create_oidc_role     = true
   }
 
   assert {

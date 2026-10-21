@@ -1,21 +1,25 @@
 output "role_arn" {
-  description = "OIDC role. Paste into the GitHub repository variable AWS_ROLE_ARN."
-  value       = aws_iam_role.github_actions.arn
+  description = "OIDC role. Paste into the GitHub repository variable AWS_ROLE_ARN. Null when create_oidc_role is false."
+  value       = var.create_oidc_role ? aws_iam_role.github_actions[0].arn : null
 }
 
 output "role_name" {
-  description = "Name of the OIDC role."
-  value       = aws_iam_role.github_actions.name
+  description = "Name of the OIDC role. Null when create_oidc_role is false."
+  value       = var.create_oidc_role ? aws_iam_role.github_actions[0].name : null
 }
 
 output "oidc_provider_arn" {
-  description = "ARN of the GitHub OIDC identity provider."
-  value       = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : "arn:aws:iam::${local.account_id}:oidc-provider/token.actions.githubusercontent.com"
+  description = "ARN of the GitHub OIDC identity provider. Null when OIDC is not used."
+  value = (
+    !var.create_oidc_role ? null :
+    var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn :
+    "arn:aws:iam::${local.account_id}:oidc-provider/token.actions.githubusercontent.com"
+  )
 }
 
 output "trust_policy_json" {
   description = "Trust policy, in case you prefer to paste it into the console instead of running this bootstrap."
-  value       = local.assume_role_policy
+  value       = var.create_oidc_role ? local.assume_role_policy : null
 }
 
 output "ci_policy_arn" {

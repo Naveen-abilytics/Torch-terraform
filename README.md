@@ -104,7 +104,8 @@ expected_account_id = "008971661427"   # guard: refuses to run against another a
 ### Method A — OIDC
 
 ```hcl
-create_oidc_provider = true   # let Terraform register the provider
+create_oidc_role     = true
+create_oidc_provider = true    # let Terraform register the provider
 create_static_user   = false
 ```
 
@@ -119,13 +120,17 @@ permissions policy. Take the `role_arn` output → that is `AWS_ROLE_ARN`.
 ### Method B — static secret
 
 ```hcl
-create_oidc_provider = false  # OIDC is not used at all in this mode
+create_oidc_role     = false   # <- do not create an OIDC role at all
+create_oidc_provider = false   # <- do not touch the OIDC provider
 create_static_user   = true
 ```
 
-Apply creates the IAM user `github-actions-ecs`, attaches the same scoped policy, and
-generates an access key. Take `static_access_key_id` and `static_secret_access_key` from
-the outputs.
+Apply creates **only** the shared permissions policy, the IAM user `github-actions-ecs`,
+and an access key. Nothing OIDC-related is touched, so this works even when the
+account cannot register `token.actions.githubusercontent.com`. Take
+`static_access_key_id` and `static_secret_access_key` from the outputs.
+
+> This is the configuration currently in `bootstrap-oidc/terraform.tfvars`.
 
 ## 2. GitHub: secrets and variables
 

@@ -67,6 +67,19 @@ variable "create_oidc_provider" {
   default     = true
 }
 
+variable "create_oidc_role" {
+  description = <<-EOT
+    Create the OIDC role (and, if create_oidc_provider is true, the OIDC provider
+    itself). Set to false for the "static credentials" auth mode - then the
+    bootstrap only creates the scoped policy and the IAM user, and never touches
+    OIDC. This is what you want if the account cannot register the GitHub OIDC
+    provider, because the role creation would otherwise fail with
+    "Invalid principal: OIDC provider ... does not exist".
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "create_static_user" {
   description = <<-EOT
     Create a scoped IAM user with a long-lived access key, for the

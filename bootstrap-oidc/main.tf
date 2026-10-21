@@ -180,7 +180,7 @@ locals {
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
-  count = var.create_oidc_provider ? 1 : 0
+  count = var.create_oidc_role && var.create_oidc_provider ? 1 : 0
 
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
@@ -188,6 +188,8 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 resource "aws_iam_role" "github_actions" {
+  count = var.create_oidc_role ? 1 : 0
+
   name                 = var.role_name
   description          = "GitHub Actions OIDC role for the ${var.app_name} ECS deployment."
   assume_role_policy   = local.assume_role_policy
@@ -204,7 +206,9 @@ resource "aws_iam_policy" "ci_permissions" {
 }
 
 resource "aws_iam_role_policy_attachment" "ci_role" {
-  role       = aws_iam_role.github_actions.name
+  count = var.create_oidc_role ? 1 : 0
+
+  role       = aws_iam_role.github_actions[0].name
   policy_arn = aws_iam_policy.ci_permissions.arn
 }
 
