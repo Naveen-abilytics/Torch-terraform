@@ -31,11 +31,31 @@ fail() {
 
 # --- validate the inputs -----------------------------------------------------
 if [ -z "${CI_CREDENTIALS_SECRET_ARN:-}" ]; then
-  fail "CI_CREDENTIALS_SECRET_ARN is not set. Run scripts/setup-github-env.ps1 to create it."
+  cat >&2 <<'EOF'
+::error title=CI_CREDENTIALS_SECRET_ARN is missing::The GitHub repository variable
+CI_CREDENTIALS_SECRET_ARN is not set, so there is nothing to read.
+
+Fix it by running the one-time bootstrap on a machine with AWS admin credentials:
+
+  aws configure
+  ./scripts/register-ci-identity.ps1
+
+That applies bootstrap-ci/, uploads the reader key and sets this variable.
+EOF
+  exit 1
 fi
 
 if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
-  fail "The reader credentials are missing. Expected the GitHub secrets SM_READER_ACCESS_KEY_ID and SM_READER_SECRET_ACCESS_KEY."
+  cat >&2 <<'EOF'
+::error title=Reader credentials are missing::The GitHub secrets
+SM_READER_ACCESS_KEY_ID and SM_READER_SECRET_ACCESS_KEY are not set.
+
+Fix it by running the one-time bootstrap on a machine with AWS admin credentials:
+
+  aws configure
+  ./scripts/register-ci-identity.ps1
+EOF
+  exit 1
 fi
 
 if ! command -v aws >/dev/null 2>&1; then
