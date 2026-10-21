@@ -55,6 +55,8 @@ main ──► [build & plan]  (runs on every push, no approval needed)
 │   ├── main.tf             #   trust policy + scoped CI permissions
 │   ├── terraform.tfvars    #   set github_org + github_repo (git-ignored)
 │   └── tests/              #   offline plan via the mock provider
+├── scripts/
+│   └── setup-github-env.ps1#   creates the environment + repo variables
 └── .github/workflows/deploy.yml
 ```
 
@@ -162,6 +164,17 @@ Then, in the environment:
 With a required reviewer set, the `deploy` job stops at `Waiting for approval` and shows
 an **Approve and deploy** button. Nobody — including you — can bypass it except by
 disabling the protection rule.
+
+> The environment and the repository variables can be created automatically:
+>
+> ```powershell
+> # after the bootstrap, so AWS_ROLE_ARN can be registered too
+> .\scripts\setup-github-env.ps1 -AwsRoleArn arn:aws:iam::123456789012:role/github-actions-ecs-deploy
+> ```
+>
+> The **required reviewer** still has to be added in the UI: GitHub's API for that rule
+> only accepts GitHub App requests, so a personal access token gets
+> `422 App not installed on organization`. The script prints a reminder.
 
 ## 4. Push it
 
