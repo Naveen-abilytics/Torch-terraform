@@ -11,21 +11,8 @@ variables {
 }
 
 # The mock provider stubs every data source with a random string, so the
-# values that must be real JSON or real IDs are supplied here.
-override_data {
-  target = data.aws_iam_policy_document.ecs_assume_role
-  values = {
-    json = jsonencode({
-      Version = "2012-10-17"
-      Statement = [{
-        Effect    = "Allow"
-        Action    = "sts:AssumeRole"
-        Principal = { Service = "ecs-tasks.amazonaws.com" }
-      }]
-    })
-  }
-}
-
+# values that must be real IDs are supplied here. The IAM policies are plain
+# jsonencode() expressions, so they are asserted directly.
 override_data {
   target = data.aws_vpc.default
   values = {

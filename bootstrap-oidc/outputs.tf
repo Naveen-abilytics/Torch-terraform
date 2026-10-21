@@ -15,7 +15,7 @@ output "oidc_provider_arn" {
 
 output "trust_policy_json" {
   description = "Trust policy, in case you prefer to paste it into the console instead of running this bootstrap."
-  value       = data.aws_iam_policy_document.assume.json
+  value       = local.assume_role_policy
 }
 
 output "account_id" {

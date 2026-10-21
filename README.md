@@ -52,6 +52,9 @@ main ──► [build & plan]  (runs on every push, no approval needed)
 │   ├── outputs.tf
 │   └── tests/plan.tftest.hcl# offline plan via the mock provider
 ├── bootstrap-oidc/          # ONE-TIME admin bootstrap: GitHub OIDC provider + role
+│   ├── main.tf             #   trust policy + scoped CI permissions
+│   ├── terraform.tfvars    #   set github_org + github_repo (git-ignored)
+│   └── tests/              #   offline plan via the mock provider
 └── .github/workflows/deploy.yml
 ```
 
@@ -66,22 +69,24 @@ bootstrapped out of band. Run this once, from a machine with working AWS credent
 
 ```bash
 cd bootstrap-oidc
-cp terraform.tfvars.example terraform.tfvars     # edit github_org + github_repo
 terraform init
 terraform apply
 ```
 
+`terraform.tfvars` already exists — edit it and set `github_org` + `github_repo` to your
+repo. It currently has `create_oidc_provider = false`, which tells Terraform that your
+account **already** has the GitHub OIDC provider registered, so it will not try to create
+it and will reference the existing provider by ARN instead.
+
 It creates:
 
-* `aws_iam_openid_connect_provider.github` — the `token.actions.githubusercontent.com` provider
 * `aws_iam_role.github_actions` — trust policy scoped to exactly two subjects
 * a scoped inline policy (ECR / ECS / Logs / IAM on the two ECS roles only)
 
 Output `role_arn` → this is the value of the GitHub variable `AWS_ROLE_ARN`.
 
-> If the account already has the GitHub OIDC provider, set
-> `create_oidc_provider = false` and import it:
-> `terraform import aws_iam_openid_connect_provider.github arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com`
+> If your account does **not** already have the provider, flip `create_oidc_provider` back
+> to `true` in `terraform.tfvars` and Terraform will create it for you.
 
 ### The OIDC method in detail
 

@@ -46,10 +46,9 @@ variable "role_name" {
 
 variable "create_oidc_provider" {
   description = <<-EOT
-    Set to false if the account already has the GitHub OIDC provider.
-    In that case import it first:
-      terraform import aws_iam_openid_connect_provider.github \
-        arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com
+    Set to false if the account already has the GitHub OIDC provider registered.
+    Terraform will then leave the provider alone and reference the existing one
+    by ARN in the role's trust policy. No import is needed in that mode.
   EOT
   type        = bool
   default     = true
