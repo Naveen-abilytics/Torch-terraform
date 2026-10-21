@@ -411,7 +411,22 @@ Tear down: `terraform destroy` in `terraform/`.
 
 STS received the token and rejected it. In order of likelihood:
 
-1. **The `sub` claim in the trust policy is wrong.** GitHub OIDC has **no**
+1. **The trust policy is the broken console template.** AWS's published GitHub
+   Actions trust-policy template is often distributed with its placeholders
+   mangled — `token.actions` and `sts` get stripped, leaving condition keys like
+   `://githubusercontent.com:aud` and a principal of
+   `arn:aws:iam::<acct>:oidc-provider/://githubusercontent.com`. STS matches
+   condition keys **literally**, so such a policy rejects every token. Fix it
+   in one command:
+
+   ```powershell
+   .\scripts\fix-oidc-trust-policy.ps1
+   ```
+
+   That uploads `bootstrap-oidc/trust-policy.json` — the same policy Terraform
+   generates — and then verifies the live role.
+
+2. **The `sub` claim in the trust policy is wrong.** GitHub OIDC has **no**
    `:branch:` subject. A push to a branch presents
    `repo:<org>/<repo>:ref:refs/heads/<branch>`. The workflow's **Show OIDC token
    claims** step prints the live `sub` — compare it with the trust policy:
@@ -421,11 +436,11 @@ STS received the token and rejected it. In order of likelihood:
      --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition.StringLike' --output json
    ```
 
-2. **The trust policy was edited in AWS but not in Terraform.** Re-apply the
+3. **The trust policy was edited in AWS but not in Terraform.** Re-apply the
    bootstrap so the two agree, or Terraform will revert your manual edit on the
    next apply.
 
-3. **The provider ARN is wrong.** The trust policy's `Principal.Federated` must be
+4. **The provider ARN is wrong.** The trust policy's `Principal.Federated` must be
    the provider ARN for *this* account. Verify:
 
    ```powershell
@@ -437,7 +452,7 @@ STS received the token and rejected it. In order of likelihood:
    `Url` must be `https://token.actions.githubusercontent.com` and `ClientIds` must
    contain `sts.amazonaws.com`.
 
-4. **The wrong ARN is in `AWS_ROLE_ARN`.** `role-to-assume` needs the **role** ARN
+5. **The wrong ARN is in `AWS_ROLE_ARN`.** `role-to-assume` needs the **role** ARN
    (`arn:aws:iam::008971661427:role/github-actions-ecs-deploy`), never the
    **provider** ARN. The provider ARN only belongs inside the trust policy.
 
