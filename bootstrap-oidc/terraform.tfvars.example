@@ -1,6 +1,7 @@
 # Copy to terraform.tfvars and fill in.
-github_org  = "your-github-org"
-github_repo = "your-repo-name"
+github_org  = "Naveen-abilytics"
+github_repo = "
+Torch-terraform"
 
 aws_region = "us-east-1"
 
